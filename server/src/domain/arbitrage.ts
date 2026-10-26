@@ -3,14 +3,20 @@ import { askDepthUsd, bidDepthUsd, crossWalk, simulateBuy, simulateSell, sortAsk
 import type {
   AssetInfo,
   BookLevel,
+  CostBreakdown,
   Opportunity,
+  OpportunityWarning,
   OrderBook,
   OrderbookStatus,
+  SlippageInfo,
   SpotMarket,
   SuspiciousReason,
   TradeSimulation,
+  TransferCheck,
+  VolatilityInfo,
 } from './types.js';
 import { verifyTransfer } from './verification.js';
+import { UNKNOWN_VOLATILITY } from './volatility.js';
 
 export interface PairInput {
   buy: SpotMarket;
@@ -21,6 +27,10 @@ export interface PairInput {
   sellAsset?: AssetInfo;
   /** Ціна на одній з бірж сильно відхиляється від медіани інших бірж */
   priceOutlier?: boolean;
+  /** Рух ціни за останнє вікно на обох біржах (ризик однієї ноги) */
+  volatility?: VolatilityInfo;
+  /** Коли біржі востаннє віддали статуси гаманців */
+  assetInfoFetchedAt?: { buy?: number; sell?: number };
   settings: Settings;
   now: number;
 }
@@ -95,6 +105,19 @@ export function evaluatePair(input: PairInput): EvaluatedPair {
   const profitStatus =
     orderbookStatus === 'verified' && net.status === 'verified' && feeKnown && !suspicious ? 'confirmed' : 'preliminary';
 
+  const transfer: TransferCheck = {
+    status: net.status === 'verified' ? 'open' : net.status === 'suspended' ? 'blocked' : 'unknown',
+    legs: net.legs,
+    checkedAt: minDefined(input.assetInfoFetchedAt?.buy, input.assetInfoFetchedAt?.sell),
+  };
+  const slippage = computeSlippage(buyPrice, sellPrice, spreadPct, trade);
+  const costs = computeCosts(trade, spreadPct, slippage);
+  const volatility = input.volatility ?? UNKNOWN_VOLATILITY(settings.volatility.windowSec);
+  const warnings = buildWarnings({ settings, net, transfer, trade, spreadPct, slippage, costs, volatility, feeKnown, booksAvailable });
+  const blocked = warnings.some((w) => w.severity === 'block');
+  const actionable =
+    !suspicious && !blocked && net.status !== 'mismatch' && net.status !== 'no_common' && trade.netProfitUsd > 0;
+
   return {
     id: opportunityId(buy.base, buy.exchange, sell.exchange),
     base: buy.base,
@@ -118,9 +141,140 @@ export function evaluatePair(input: PairInput): EvaluatedPair {
     suspicious,
     suspiciousReasons,
     notes,
+    transfer,
+    slippage,
+    costs,
+    volatility,
+    warnings,
+    actionable,
     volume24hUsd: Math.min(buy.volume24hUsd, sell.volume24hUsd),
     updatedAt: now,
   };
+}
+
+function minDefined(a?: number, b?: number): number | null {
+  if (a === undefined && b === undefined) return null;
+  if (a === undefined) return b!;
+  if (b === undefined) return a;
+  return Math.min(a, b);
+}
+
+/** Прослизання: наскільки VWAP на цільовий обсяг гірший за найкращі котирування. */
+export function computeSlippage(buyPrice: number, sellPrice: number, spreadPct: number, trade: TradeSimulation): SlippageInfo {
+  const buyVwap = trade.buyVwap > 0 ? trade.buyVwap : buyPrice;
+  const sellVwap = trade.sellVwap > 0 ? trade.sellVwap : sellPrice;
+  const buySlippagePct = ((buyVwap - buyPrice) / buyPrice) * 100;
+  const sellSlippagePct = ((sellPrice - sellVwap) / sellPrice) * 100;
+  const vwapSpreadPct = ((sellVwap - buyVwap) / buyVwap) * 100;
+  const slippagePct = Math.max(0, spreadPct - vwapSpreadPct);
+  return {
+    buySlippagePct,
+    sellSlippagePct,
+    vwapSpreadPct,
+    slippagePct,
+    slippageShareOfSpreadPct: spreadPct > 0 ? (slippagePct / spreadPct) * 100 : slippagePct > 0 ? Infinity : 0,
+  };
+}
+
+/** Розклад витрат: валовий спред → прослизання → торгові комісії → комісія мережі → чистий прибуток. */
+export function computeCosts(trade: TradeSimulation, spreadPct: number, slippage: SlippageInfo): CostBreakdown {
+  const base = trade.spentUsd > 0 ? trade.spentUsd : trade.targetUsd;
+  const grossSpreadUsd = (base * spreadPct) / 100;
+  const slippageUsd = (base * slippage.slippagePct) / 100;
+  return {
+    grossSpreadUsd,
+    slippageUsd,
+    tradingFeesUsd: trade.buyFeeUsd + trade.sellFeeUsd,
+    networkFeeUsd: trade.networkFeeUsd,
+    networkFeeShareOfSpreadPct: grossSpreadUsd > 0 ? (trade.networkFeeUsd / grossSpreadUsd) * 100 : Infinity,
+    netProfitUsd: trade.netProfitUsd,
+  };
+}
+
+interface WarningInput {
+  settings: Settings;
+  net: ReturnType<typeof verifyTransfer>;
+  transfer: TransferCheck;
+  trade: TradeSimulation;
+  spreadPct: number;
+  slippage: SlippageInfo;
+  costs: CostBreakdown;
+  volatility: VolatilityInfo;
+  feeKnown: boolean;
+  booksAvailable: boolean;
+}
+
+function buildWarnings(i: WarningInput): OpportunityWarning[] {
+  const out: OpportunityWarning[] = [];
+  const usd = (v: number) => `$${v.toFixed(2)}`;
+  const size = i.trade.targetUsd;
+
+  if (i.transfer.status === 'blocked') {
+    const closed = i.transfer.legs
+      .filter((l) => !l.withdrawEnabled || !l.depositEnabled)
+      .map((l) => `${l.network}: ${[!l.withdrawEnabled ? 'вивід закрито' : '', !l.depositEnabled ? 'депозит закрито' : ''].filter(Boolean).join(', ')}`);
+    out.push({
+      code: 'transfer_blocked',
+      severity: 'block',
+      message: `Недоступна для переказу — ${closed.join('; ') || 'вивід або депозит призупинено'}. Кошти можуть зависнути.`,
+    });
+  }
+
+  const minWd = i.net.route?.minWithdraw;
+  if (i.transfer.status === 'open' && minWd && i.trade.boughtQty > 0 && i.trade.boughtQty < minWd) {
+    out.push({
+      code: 'below_min_withdraw',
+      severity: 'block',
+      message: `Куплена кількість ${fmtQty(i.trade.boughtQty)} менша за мінімальну суму виводу ${fmtQty(minWd)} у мережі ${i.net.route!.network}`,
+    });
+  }
+
+  if (!i.feeKnown) {
+    out.push({
+      code: 'fee_unknown',
+      severity: 'warn',
+      message: `Комісія мережі невідома — використано оцінку ${usd(i.settings.fallbackNetworkFeeUsd)}; реальна може бути вищою`,
+    });
+  }
+
+  if (i.booksAvailable && i.spreadPct > 0 && i.slippage.slippageShareOfSpreadPct > i.settings.maxSlippageShareOfSpreadPct) {
+    out.push({
+      code: 'slippage_eats_spread',
+      severity: 'warn',
+      message: `Прослизання з'їдає ${fmtPct(i.slippage.slippageShareOfSpreadPct)} спреду: за VWAP спред ${i.slippage.vwapSpreadPct.toFixed(2)}% замість ${i.spreadPct.toFixed(2)}% на угоді ${usd(size)}`,
+    });
+  }
+
+  if (i.costs.grossSpreadUsd > 0 && i.trade.networkFeeUsd >= i.costs.grossSpreadUsd) {
+    out.push({
+      code: 'network_fee_exceeds_spread',
+      severity: 'warn',
+      message: `Комісія мережі ${usd(i.trade.networkFeeUsd)} перевищує весь спред ${usd(i.costs.grossSpreadUsd)} на угоді ${usd(size)} — операція збиткова`,
+    });
+  } else if (i.trade.netProfitUsd <= 0) {
+    out.push({
+      code: 'unprofitable',
+      severity: 'warn',
+      message: `Після прослизання (${usd(i.costs.slippageUsd)}), торгових комісій (${usd(i.costs.tradingFeesUsd)}) і комісії мережі (${usd(i.trade.networkFeeUsd)}) угода на ${usd(size)} збиткова: ${usd(i.trade.netProfitUsd)}`,
+    });
+  }
+
+  if (i.volatility.level === 'high') {
+    out.push({
+      code: 'high_volatility',
+      severity: 'warn',
+      message: `Ризик однієї ноги: ціна за ${i.volatility.windowSec} с рухалась на ${i.volatility.rangePct.toFixed(2)}% — за час переказу спред може зникнути`,
+    });
+  }
+  return out;
+}
+
+function fmtPct(v: number): string {
+  return Number.isFinite(v) ? `${v.toFixed(0)}%` : '100%+';
+}
+
+function fmtQty(v: number): string {
+  return v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toPrecision(3);
 }
 
 export function simulateTrade(

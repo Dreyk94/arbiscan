@@ -1,13 +1,14 @@
 import clsx from 'clsx';
-import { Download, LogOut, Play, RotateCcw, Save, Shuffle, Upload, X } from 'lucide-react';
+import { Download, LogOut, Play, RotateCcw, Save, Shuffle, Trash2, Upload, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, getAdminToken, setAdminToken } from '../lib/api';
 import { ALL_EXCHANGES, EXCHANGE_LABELS, type Settings } from '../types';
 
-type Tab = 'general' | 'fees' | 'notify' | 'demo' | 'io';
+type Tab = 'general' | 'fees' | 'risk' | 'notify' | 'demo' | 'io';
 const TABS: Array<[Tab, string]> = [
   ['general', 'Загальні'],
   ['fees', 'Біржі та комісії'],
+  ['risk', 'Ризики та журнал'],
   ['notify', 'Сповіщення'],
   ['demo', 'Демо-дані'],
   ['io', 'Імпорт / експорт'],
@@ -172,6 +173,7 @@ export function AdminPanel({ open, onClose, onChanged }: { open: boolean; onClos
                     <NumField label="Мін. обіг ринку за 24г" suffix="USD" step={1000} value={draft.minVolume24hUsd} onChange={(v) => set('minVolume24hUsd', v)} />
                     <NumField label="Інтервал сканування" suffix="с" value={draft.scanIntervalSec} min={3} onChange={(v) => set('scanIntervalSec', v)} />
                     <NumField label="Пам’ять новизни" suffix="с" value={draft.staleAfterSec} onChange={(v) => set('staleAfterSec', v)} hint="Через скільки зникла зв’язка знову вважатиметься новою" />
+                    <NumField label="Оновлення статусів гаманців" suffix="с" value={draft.assetInfoRefreshSec} min={30} max={3600} onChange={(v) => set('assetInfoRefreshSec', v)} hint="Як часто в LIVE перепитувати біржі про deposit/withdraw і комісії мереж" />
                   </div>
                 </div>
               )}
@@ -192,11 +194,47 @@ export function AdminPanel({ open, onClose, onChanged }: { open: boolean; onClos
                   <p className="text-xs text-slate-500">USDC повністю виключено: ринки з USDC не завантажуються ні як котирувальна, ні як базова валюта.</p>
                 </div>
               )}
+              {draft && tab === 'risk' && (
+                <div className="space-y-5">
+                  <div className="rounded-lg border border-white/5 p-4">
+                    <h3 className="text-sm font-semibold text-white">Прослизання (VWAP)</h3>
+                    <p className="mt-1 mb-3 text-xs text-slate-400">Ціни купівлі/продажу рахуються як VWAP за глибиною стакана під обсяг угоди. Коли прослизання з’їдає більшу частку спреду за поріг — зв’язка отримує попередження.</p>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <NumField label="Поріг частки спреду, яку з’їдає прослизання" suffix="%" value={draft.maxSlippageShareOfSpreadPct} min={1} max={100} onChange={(v) => set('maxSlippageShareOfSpreadPct', v)} />
+                      <NumField label="Обсяг угоди (той самий, що в «Загальних»)" suffix="USDT" value={draft.tradeSizeUsd} min={1} onChange={(v) => set('tradeSizeUsd', v)} />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/5 p-4">
+                    <h3 className="text-sm font-semibold text-white">Волатильність (ризик однієї ноги)</h3>
+                    <p className="mt-1 mb-3 text-xs text-slate-400">Сканер зберігає mid-ціни кожного ринку і рахує розмах за вікно. Високий розмах = попередження, що спред може зникнути, поки монети йдуть між біржами.</p>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <NumField label="Вікно аналізу" suffix="с" value={draft.volatility.windowSec} min={10} max={600} onChange={(v) => set('volatility', { ...draft.volatility, windowSec: v })} hint="Потрібно ≥2 циклів сканування у вікні" />
+                      <NumField label="Помірна волатильність від" suffix="%" step={0.1} value={draft.volatility.warnPct} onChange={(v) => set('volatility', { ...draft.volatility, warnPct: v })} />
+                      <NumField label="Висока волатильність від" suffix="%" step={0.1} value={draft.volatility.highPct} onChange={(v) => set('volatility', { ...draft.volatility, highPct: v })} hint="Показується попередження" />
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-white/5 p-4">
+                    <h3 className="text-sm font-semibold text-white">Журнал зв’язок</h3>
+                    <p className="mt-1 mb-3 text-xs text-slate-400">Кожна поява спреду від порога записується у <code>server/data/journal.json</code> з часом, біржами, станом стакана, переказу й вердиктом. Перегляд — кнопка «Журнал» у шапці.</p>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <label className="flex items-center gap-2 pt-6">
+                        <input type="checkbox" className="h-4 w-4 accent-emerald-400" checked={draft.journal.enabled} onChange={(e) => set('journal', { ...draft.journal, enabled: e.target.checked })} />
+                        <span className="text-sm text-white">Вести журнал</span>
+                      </label>
+                      <NumField label="Записувати від спреду" suffix="%" step={0.1} value={draft.journal.minSpreadPct} onChange={(v) => set('journal', { ...draft.journal, minSpreadPct: v })} />
+                      <NumField label="Макс. записів" value={draft.journal.maxEntries} min={100} max={100000} step={100} onChange={(v) => set('journal', { ...draft.journal, maxEntries: v })} hint="Найстаріші закриті записи видаляються" />
+                    </div>
+                    <button className="btn-danger mt-3" disabled={busy} onClick={() => run(async () => { if (!window.confirm('Видалити всі записи журналу?')) return; await api.clearJournal(); flash(true, 'Журнал очищено'); onChanged(); })}>
+                      <Trash2 size={14} /> Очистити журнал
+                    </button>
+                  </div>
+                </div>
+              )}
               {draft && tab === 'notify' && (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <NumField label="Сповіщати від спреду" suffix="%" step={0.1} value={draft.notifications.minSpreadPct} onChange={(v) => set('notifications', { ...draft.notifications, minSpreadPct: v })} />
                   <NumField label="Пауза між повторами" suffix="хв" value={draft.notifications.cooldownMin} onChange={(v) => set('notifications', { ...draft.notifications, cooldownMin: v })} hint="Та сама зв’язка не сповіщається повторно протягом цього часу" />
-                  <p className="text-xs text-slate-500 sm:col-span-2">Підозрілі зв’язки ніколи не сповіщаються. Сповіщення не змінюють фільтри й не приховують зв’язки. Увімкнути сповіщення в браузері — кнопка «Сповіщення» у шапці.</p>
+                  <p className="text-xs text-slate-500 sm:col-span-2">Підозрілі зв’язки та зв’язки з закритим виводом/депозитом («Недоступна для переказу») ніколи не сповіщаються. Сповіщення не змінюють фільтри й не приховують зв’язки. Увімкнути сповіщення в браузері — кнопка «Сповіщення» у шапці.</p>
                 </div>
               )}
               {tab === 'demo' && (
@@ -282,7 +320,7 @@ export function AdminPanel({ open, onClose, onChanged }: { open: boolean; onClos
                 <button className="btn-outline" disabled={busy} onClick={() => run(async () => { await api.scanNow(); flash(true, 'Сканування виконано'); onChanged(); })}>
                   <Play size={14} /> Сканувати зараз
                 </button>
-                {['general', 'fees', 'notify'].includes(tab) && (
+                {['general', 'fees', 'risk', 'notify'].includes(tab) && (
                   <button className="btn-primary" disabled={!dirty || busy} onClick={() => void save()}>
                     <Save size={14} /> Зберегти
                   </button>

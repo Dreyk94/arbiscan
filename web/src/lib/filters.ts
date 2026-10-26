@@ -80,7 +80,7 @@ const PREDICATES: Record<FilterKey, (o: Opportunity, f: FilterState) => boolean>
   onlyProfitable: (o, f) => !f.onlyProfitable || o.trade.netProfitUsd > 0,
   onlyEnoughLiquidity: (o, f) => !f.onlyEnoughLiquidity || o.trade.enough === true,
   onlyConfirmed: (o, f) => !f.onlyConfirmed || o.profitStatus === 'confirmed',
-  onlyOpenTransfer: (o, f) => !f.onlyOpenTransfer || o.networkStatus === 'verified',
+  onlyOpenTransfer: (o, f) => !f.onlyOpenTransfer || o.transfer.status === 'open',
   onlyAvailable: (o, f) => !f.onlyAvailable || isAvailable(o),
   showSuspicious: (o, f) => f.showSuspicious || !o.suspicious,
 };
@@ -148,7 +148,12 @@ export function collectNetworks(list: Opportunity[]): Array<{ network: string; c
   return [...counts.entries()].map(([network, count]) => ({ network, count })).sort((a, b) => b.count - a.count || a.network.localeCompare(b.network));
 }
 
-/** Зв'язку реально можна виконати: переказ відкритий у спільній мережі, обидва стакани покривають угоду, без ознак підозри. */
+/** Зв'язку реально можна виконати: переказ відкритий у спільній мережі, обидва стакани покривають угоду, без ознак підозри, прибуток після всіх витрат додатний. */
 export function isAvailable(o: Opportunity): boolean {
-  return o.networkStatus === 'verified' && o.orderbookStatus === 'verified' && !o.suspicious;
+  return o.actionable && o.transfer.status === 'open' && o.orderbookStatus === 'verified';
+}
+
+/** Зв'язку не можна подавати як робочу: переказ заблоковано або є блокувальне попередження. */
+export function isBlocked(o: Opportunity): boolean {
+  return o.transfer.status === 'blocked' || o.warnings.some((w) => w.severity === 'block');
 }

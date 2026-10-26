@@ -1,10 +1,10 @@
 import { EXCHANGE_LABELS } from '../types';
 import clsx from 'clsx';
-import { AlertTriangle, CheckCircle2, CircleDashed, ExternalLink, ShieldAlert, XCircle } from 'lucide-react';
+import { Activity, AlertTriangle, Ban, CheckCircle2, CircleDashed, ExternalLink, ShieldAlert, XCircle } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { NETWORK_TEXT, SUSPICIOUS_TEXT, type Tone } from '../lib/labels';
+import { NETWORK_TEXT, SUSPICIOUS_TEXT, VOLATILITY_TEXT, WARNING_TEXT, type Tone } from '../lib/labels';
 import { tradeUrl } from '../lib/tradeUrl';
-import type { ExchangeId, NetworkStatus, Opportunity, OrderbookStatus } from '../types';
+import type { ExchangeId, NetworkStatus, Opportunity, OrderbookStatus, VolatilityInfo } from '../types';
 
 
 const TONES: Record<Tone, string> = {
@@ -43,8 +43,30 @@ export function OrderbookBadge({ status }: { status: OrderbookStatus }) {
 export function NetworkBadge({ status }: { status: NetworkStatus }) {
   const s = NETWORK_TEXT[status];
   return (
-    <Badge tone={s.tone} title={s.title} icon={status === 'verified' ? <CheckCircle2 size={12} /> : status === 'unverified' ? <CircleDashed size={12} /> : <XCircle size={12} />}>
+    <Badge tone={s.tone} title={s.title} icon={status === 'verified' ? <CheckCircle2 size={12} /> : status === 'unverified' ? <CircleDashed size={12} /> : status === 'suspended' ? <Ban size={12} /> : <XCircle size={12} />}>
       {s.text}
+    </Badge>
+  );
+}
+
+export function VolatilityBadge({ v, showLow = false }: { v: VolatilityInfo; showLow?: boolean }) {
+  if (v.level === 'unknown' || (v.level === 'low' && !showLow)) return null;
+  const s = VOLATILITY_TEXT[v.level];
+  return (
+    <Badge tone={s.tone} title={`${s.title}. Розмах за ${v.windowSec} с: ${v.rangePct.toFixed(2)}%`} icon={<Activity size={12} />}>
+      {v.level === 'high' ? 'Волатильно' : v.level === 'medium' ? 'Рухлива ціна' : s.text}
+    </Badge>
+  );
+}
+
+/** Попередження про комісії/прослизання/мін. вивід (переказ і волатильність мають власні бейджі). */
+export function WarningsBadge({ o }: { o: Opportunity }) {
+  const list = o.warnings.filter((w) => w.code !== 'transfer_blocked' && w.code !== 'high_volatility' && w.code !== 'fee_unknown');
+  if (!list.length) return null;
+  const block = list.some((w) => w.severity === 'block');
+  return (
+    <Badge tone={block ? 'bad' : 'warn'} title={list.map((w) => w.message).join('\n')} icon={<AlertTriangle size={12} />}>
+      {list.length === 1 ? WARNING_TEXT[list[0].code] : `Попереджень: ${list.length}`}
     </Badge>
   );
 }

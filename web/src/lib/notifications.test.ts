@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Opportunity } from '../types';
-import { EMPTY_NOTIFY_STATE, selectNotifications } from './notifications';
+import { EMPTY_NOTIFY_STATE, qualifies, selectNotifications } from './notifications';
 
-const o = (id: string, spreadPct: number, suspicious = false) => ({ id, spreadPct, suspicious }) as Opportunity;
+const o = (id: string, spreadPct: number, suspicious = false, extra: Partial<Opportunity> = {}) =>
+  ({ id, spreadPct, suspicious, transfer: { status: 'open', legs: [], checkedAt: null }, warnings: [], ...extra }) as Opportunity;
 const rules = { minSpreadPct: 2, cooldownMin: 30 };
 
 describe('selectNotifications', () => {
@@ -23,5 +24,14 @@ describe('selectNotifications', () => {
     const gone2 = selectNotifications([], back.next, rules, t0 + 31 * 60_000);
     const later = selectNotifications([o('a', 3)], gone2.next, rules, t0 + 32 * 60_000);
     expect(later.toNotify.map((x) => x.id)).toEqual(['a']);
+  });
+
+  it('заблокований переказ і блокувальні попередження не сповіщаються', () => {
+    expect(qualifies(o('a', 3), rules)).toBe(true);
+    expect(qualifies(o('b', 3, false, { transfer: { status: 'blocked', legs: [], checkedAt: null } }), rules)).toBe(false);
+    expect(qualifies(o('c', 3, false, { warnings: [{ code: 'below_min_withdraw', severity: 'block', message: '' }] }), rules)).toBe(false);
+    expect(qualifies(o('d', 3, false, { warnings: [{ code: 'unprofitable', severity: 'warn', message: '' }] }), rules)).toBe(true);
+    const r = selectNotifications([o('x', 5, false, { transfer: { status: 'blocked', legs: [], checkedAt: null } })], EMPTY_NOTIFY_STATE, rules, 1);
+    expect(r.toNotify).toHaveLength(0);
   });
 });

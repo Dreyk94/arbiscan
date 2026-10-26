@@ -1,4 +1,6 @@
 import type { Opportunity } from '../types';
+import { isBlocked } from './filters';
+import { WARNING_TEXT } from './labels';
 
 export interface NotifyState {
   /** id → час останнього сповіщення */
@@ -14,8 +16,9 @@ export interface NotifyRules {
   cooldownMin: number;
 }
 
+/** Сповіщаємо лише про зв'язки, які можна подавати як робочі: не підозрілі, переказ не заблоковано. */
 export function qualifies(o: Opportunity, rules: NotifyRules): boolean {
-  return !o.suspicious && o.spreadPct >= rules.minSpreadPct;
+  return !o.suspicious && !isBlocked(o) && o.spreadPct >= rules.minSpreadPct;
 }
 
 /**
@@ -64,12 +67,14 @@ export function notificationText(o: Opportunity, exLabel: (id: string) => string
         ? `не вистачає на $${o.trade.targetUsd}`
         : 'обсяг невідомий';
   const profitLabel = o.profitStatus === 'confirmed' ? 'прибуток' : 'попередній прибуток';
+  const warn = o.warnings.filter((w) => w.code !== 'fee_unknown').map((w) => WARNING_TEXT[w.code]);
   return {
     title: `ArbiScan: ${o.base} спред ${o.spreadPct.toFixed(2)}%`,
     body: [
       `${exLabel(o.buyExchange)} → ${exLabel(o.sellExchange)}`,
-      `Ліквідність: ${OB_TEXT[o.orderbookStatus]}, ${enough}`,
-      `${profitLabel}: ${o.trade.netProfitUsd >= 0 ? '+' : ''}$${o.trade.netProfitUsd.toFixed(2)}`,
+      `За VWAP на $${o.trade.targetUsd}: ${o.slippage.vwapSpreadPct.toFixed(2)}% · ${OB_TEXT[o.orderbookStatus]}, ${enough}`,
+      `${profitLabel}: ${o.trade.netProfitUsd >= 0 ? '+' : ''}$${o.trade.netProfitUsd.toFixed(2)} (комісія мережі $${o.trade.networkFeeUsd.toFixed(2)})`,
+      ...(warn.length ? [`Увага: ${warn.join(', ')}`] : []),
     ].join('\n'),
   };
 }

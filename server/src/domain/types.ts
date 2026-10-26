@@ -79,6 +79,84 @@ export interface NetworkRoute {
   withdrawFeeCoin: number;
   withdrawFeeUsd: number;
   contract?: string;
+  /** Мінімальна сума виводу в монетах (якщо біржа її віддає) */
+  minWithdraw?: number;
+}
+
+/** Статус шляху переказу «вивід з біржі купівлі → депозит на біржу продажу» */
+export type TransferStatus = 'open' | 'blocked' | 'unknown';
+
+/** Стан гаманців у конкретній спільній мережі на обох біржах */
+export interface TransferLeg {
+  network: string;
+  /** Вивід увімкнено на біржі купівлі */
+  withdrawEnabled: boolean;
+  /** Депозит увімкнено на біржі продажу */
+  depositEnabled: boolean;
+  withdrawFeeCoin: number;
+  minWithdraw?: number;
+}
+
+export interface TransferCheck {
+  status: TransferStatus;
+  legs: TransferLeg[];
+  /** Коли біржі востаннє віддали статуси гаманців (мінімум з двох бірж) */
+  checkedAt: number | null;
+}
+
+export type VolatilityLevel = 'low' | 'medium' | 'high' | 'unknown';
+
+/** Рух ціни за останнє вікно (≈1 хв) на обох біржах — ризик однієї ноги */
+export interface VolatilityInfo {
+  level: VolatilityLevel;
+  /** Зміна mid-ціни за вікно на біржі купівлі, % (знак зберігається) */
+  buyMovePct: number;
+  /** Зміна mid-ціни за вікно на біржі продажу, % */
+  sellMovePct: number;
+  /** Максимальний розмах (max-min)/min за вікно серед двох бірж, % */
+  rangePct: number;
+  windowSec: number;
+  samples: number;
+}
+
+export interface SlippageInfo {
+  /** Наскільки VWAP купівлі гірший за найкращий ask, % */
+  buySlippagePct: number;
+  /** Наскільки VWAP продажу гірший за найкращий bid, % */
+  sellSlippagePct: number;
+  /** Спред за VWAP (реальний для цільового обсягу), % */
+  vwapSpreadPct: number;
+  /** Скільки відсоткових пунктів спреду з'їдає прослизання */
+  slippagePct: number;
+  /** Частка спреду, яку з'їдає прослизання, % (0..∞) */
+  slippageShareOfSpreadPct: number;
+}
+
+export interface CostBreakdown {
+  /** Валовий спред на цільовий обсяг за найкращими котируваннями, USD */
+  grossSpreadUsd: number;
+  slippageUsd: number;
+  tradingFeesUsd: number;
+  networkFeeUsd: number;
+  /** Частка комісії мережі у валовому спреді, % */
+  networkFeeShareOfSpreadPct: number;
+  netProfitUsd: number;
+}
+
+export type WarningCode =
+  | 'transfer_blocked'
+  | 'slippage_eats_spread'
+  | 'network_fee_exceeds_spread'
+  | 'unprofitable'
+  | 'below_min_withdraw'
+  | 'fee_unknown'
+  | 'high_volatility';
+
+export interface OpportunityWarning {
+  code: WarningCode;
+  /** block — зв'язку не можна подавати як робочу; warn — потребує уваги */
+  severity: 'block' | 'warn';
+  message: string;
 }
 
 export interface TradeSimulation {
@@ -127,6 +205,13 @@ export interface Opportunity {
   suspicious: boolean;
   suspiciousReasons: SuspiciousReason[];
   notes: string[];
+  transfer: TransferCheck;
+  slippage: SlippageInfo;
+  costs: CostBreakdown;
+  volatility: VolatilityInfo;
+  warnings: OpportunityWarning[];
+  /** Зв'язку можна подавати як робочу: немає блокувань, не підозріла, прибуток після всіх витрат > 0 */
+  actionable: boolean;
   volume24hUsd: number;
   firstSeenAt: number;
   lastSeenAt: number;

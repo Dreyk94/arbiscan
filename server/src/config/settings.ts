@@ -38,10 +38,32 @@ export const settingsSchema = z.object({
   scanIntervalSec: z.number().int().min(3).max(600),
   /** Через скільки секунд неактивна зв'язка видаляється */
   staleAfterSec: z.number().int().min(10).max(86_400),
+  /** Як часто оновлювати статуси гаманців (deposit/withdraw) та комісії мереж у live-режимі, с */
+  assetInfoRefreshSec: z.number().int().min(30).max(3600).default(120),
+  /** Попереджати, якщо прослизання з'їдає більше цієї частки спреду, % */
+  maxSlippageShareOfSpreadPct: z.number().min(1).max(100).default(50),
   notifications: z.object({
     minSpreadPct: z.number().min(0).max(100),
     cooldownMin: z.number().min(1).max(1440),
   }),
+  journal: z
+    .object({
+      enabled: z.boolean(),
+      /** Мінімальний спред, з якого зв'язка потрапляє в журнал, % */
+      minSpreadPct: z.number().min(0).max(100),
+      maxEntries: z.number().int().min(100).max(100_000),
+    })
+    .default({ enabled: true, minSpreadPct: 2, maxEntries: 5000 }),
+  volatility: z
+    .object({
+      /** Вікно аналізу руху ціни, с */
+      windowSec: z.number().int().min(10).max(600),
+      /** Розмах ціни за вікно для позначки «помірна волатильність», % */
+      warnPct: z.number().min(0.05).max(50),
+      /** Розмах ціни за вікно для попередження про високий ризик однієї ноги, % */
+      highPct: z.number().min(0.1).max(100),
+    })
+    .default({ windowSec: 60, warnPct: 0.8, highPct: 2 }),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
@@ -67,7 +89,11 @@ export const DEFAULT_SETTINGS: Settings = {
   fallbackNetworkFeeUsd: 1,
   scanIntervalSec: 10,
   staleAfterSec: 120,
+  assetInfoRefreshSec: 120,
+  maxSlippageShareOfSpreadPct: 50,
   notifications: { minSpreadPct: 2, cooldownMin: 30 },
+  journal: { enabled: true, minSpreadPct: 2, maxEntries: 5000 },
+  volatility: { windowSec: 60, warnPct: 0.8, highPct: 2 },
 };
 
 export const partialSettingsSchema = settingsSchema
@@ -84,6 +110,8 @@ export const partialSettingsSchema = settingsSchema
       })
       .partial(),
     notifications: settingsSchema.shape.notifications.partial(),
+    journal: settingsSchema.shape.journal.unwrap().partial(),
+    volatility: settingsSchema.shape.volatility.unwrap().partial(),
   })
   .partial();
 export type PartialSettings = z.infer<typeof partialSettingsSchema>;
@@ -98,6 +126,8 @@ export function mergeSettings(base: Settings, patch: PartialSettings): Settings 
     ...stripUndefined(patch),
     exchanges,
     notifications: { ...base.notifications, ...(patch.notifications ?? {}) },
+    journal: { ...base.journal, ...stripUndefined(patch.journal ?? {}) },
+    volatility: { ...base.volatility, ...stripUndefined(patch.volatility ?? {}) },
   };
   return settingsSchema.parse(merged);
 }

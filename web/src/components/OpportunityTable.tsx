@@ -4,7 +4,8 @@ import { Fragment, useEffect, useRef } from 'react';
 import type { SortDir, SortKey } from '../lib/filters';
 import { fmtPct, fmtPrice, fmtSignedUsd, fmtUsdCompact, timeAgo } from '../lib/format';
 import type { Opportunity } from '../types';
-import { ExchangeTag, NetworkBadge, OrderbookBadge, ProfitBadge, SuspiciousBadge } from './Badges';
+import { isBlocked } from '../lib/filters';
+import { ExchangeTag, NetworkBadge, OrderbookBadge, ProfitBadge, SuspiciousBadge, VolatilityBadge, WarningsBadge } from './Badges';
 import { OpportunityDetails } from './OpportunityDetails';
 
 interface Props {
@@ -42,10 +43,28 @@ function Enough({ o }: { o: Opportunity }) {
 
 function Profit({ o }: { o: Opportunity }) {
   const v = o.trade.netProfitUsd;
+  const dead = o.suspicious || isBlocked(o);
   return (
     <div className="flex flex-col items-end gap-0.5">
-      <span className={clsx('num text-sm font-semibold', o.suspicious ? 'text-slate-500 line-through' : v > 0 ? 'text-emerald-300' : 'text-rose-300')}>{fmtSignedUsd(v)}</span>
-      <span className="text-[10px] text-slate-500">{o.profitStatus === 'confirmed' ? 'після комісій' : 'попередній'}</span>
+      <span className={clsx('num text-sm font-semibold', dead ? 'text-slate-500 line-through' : v > 0 ? 'text-emerald-300' : 'text-rose-300')}>{fmtSignedUsd(v)}</span>
+      <span className={clsx('text-[10px]', o.transfer.status === 'blocked' ? 'text-rose-400' : 'text-slate-500')}>
+        {o.transfer.status === 'blocked' ? 'переказ закрито' : o.profitStatus === 'confirmed' ? 'після всіх витрат' : 'попередній'}
+      </span>
+    </div>
+  );
+}
+
+function SpreadCell({ o }: { o: Opportunity }) {
+  const vwap = o.slippage.vwapSpreadPct;
+  const showVwap = o.orderbookStatus !== 'unverified' && Math.abs(vwap - o.spreadPct) >= 0.005;
+  return (
+    <div className="flex flex-col items-end">
+      <span className={clsx('num font-semibold', o.spreadPct >= 2 ? 'text-emerald-300' : 'text-slate-200')}>{fmtPct(o.spreadPct)}</span>
+      {showVwap && (
+        <span className={clsx('num text-[10px]', vwap <= 0 ? 'text-rose-400' : 'text-slate-500')} title={`Спред за VWAP на $${o.trade.targetUsd} з урахуванням прослизання`}>
+          VWAP {fmtPct(vwap)}
+        </span>
+      )}
     </div>
   );
 }
@@ -88,7 +107,7 @@ export function OpportunityTable({ items, sortKey, sortDir, onSort, expanded, on
                     onClick={() => onToggle(o.id)}
                     className={clsx(
                       'cursor-pointer border-b border-white/5 transition-colors hover:bg-white/[0.03]',
-                      o.suspicious && 'opacity-60',
+                      (o.suspicious || o.transfer.status === 'blocked') && 'opacity-60',
                       highlight === o.id && 'animate-flash',
                       expanded === o.id && 'bg-white/[0.03]',
                     )}
@@ -109,7 +128,9 @@ export function OpportunityTable({ items, sortKey, sortDir, onSort, expanded, on
                       <div className="text-slate-200">{fmtPrice(o.buyPrice)}</div>
                       <div className="text-slate-400">{fmtPrice(o.sellPrice)}</div>
                     </td>
-                    <td className={clsx('num px-3 py-2.5 text-right font-semibold', o.spreadPct >= 2 ? 'text-emerald-300' : 'text-slate-200')}>{fmtPct(o.spreadPct)}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <SpreadCell o={o} />
+                    </td>
                     <td className="num px-3 py-2.5 text-right text-xs">
                       {o.orderbookStatus === 'unverified' ? (
                         <span className="text-slate-500">не перевірено</span>
@@ -127,10 +148,12 @@ export function OpportunityTable({ items, sortKey, sortDir, onSort, expanded, on
                       <Profit o={o} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <div className="flex max-w-[220px] flex-wrap gap-1">
+                      <div className="flex max-w-[260px] flex-wrap gap-1">
                         <ProfitBadge o={o} />
                         <OrderbookBadge status={o.orderbookStatus} />
                         <NetworkBadge status={o.networkStatus} />
+                        <VolatilityBadge v={o.volatility} />
+                        <WarningsBadge o={o} />
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-xs whitespace-nowrap text-slate-400">{timeAgo(o.firstSeenAt, now)}</td>
@@ -161,7 +184,7 @@ export function OpportunityTable({ items, sortKey, sortDir, onSort, expanded, on
             ref={(el) => {
               if (el) rowRefs.current.set(`${o.id}`, el);
             }}
-            className={clsx('card overflow-hidden', o.suspicious && 'opacity-60', highlight === o.id && 'animate-flash')}
+            className={clsx('card overflow-hidden', (o.suspicious || o.transfer.status === 'blocked') && 'opacity-60', highlight === o.id && 'animate-flash')}
           >
             <button className="w-full p-3 text-left" onClick={() => onToggle(o.id)}>
               <div className="flex items-start justify-between gap-2">
@@ -179,6 +202,7 @@ export function OpportunityTable({ items, sortKey, sortDir, onSort, expanded, on
                 </div>
                 <div className="text-right">
                   <div className={clsx('num text-lg font-bold', o.spreadPct >= 2 ? 'text-emerald-300' : 'text-slate-100')}>{fmtPct(o.spreadPct)}</div>
+                  {o.orderbookStatus !== 'unverified' && <div className="num text-[10px] text-slate-500">VWAP {fmtPct(o.slippage.vwapSpreadPct)}</div>}
                   <Profit o={o} />
                 </div>
               </div>
@@ -200,6 +224,8 @@ export function OpportunityTable({ items, sortKey, sortDir, onSort, expanded, on
                 <ProfitBadge o={o} />
                 <OrderbookBadge status={o.orderbookStatus} />
                 <NetworkBadge status={o.networkStatus} />
+                <VolatilityBadge v={o.volatility} />
+                <WarningsBadge o={o} />
                 <span className="ml-auto self-center text-[10px] text-slate-500">{timeAgo(o.firstSeenAt, now)}</span>
               </div>
             </button>

@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { Bell, BellOff, Settings2, SlidersHorizontal } from 'lucide-react';
+import { Bell, BellOff, History, Radar, Settings2, SlidersHorizontal } from 'lucide-react';
 import type { ScanMeta } from '../types';
 import { EXCHANGE_LABELS } from '../types';
 
@@ -11,9 +11,11 @@ interface Props {
   onOpenAdmin: () => void;
   onOpenFilters: () => void;
   activeFilters: number;
+  view: 'scanner' | 'journal';
+  onChangeView: (v: 'scanner' | 'journal') => void;
 }
 
-export function Header({ meta, notifyEnabled, notifyPermission, onToggleNotify, onOpenAdmin, onOpenFilters, activeFilters }: Props) {
+export function Header({ meta, notifyEnabled, notifyPermission, onToggleNotify, onOpenAdmin, onOpenFilters, activeFilters, view, onChangeView }: Props) {
   const notifyTitle =
     notifyPermission === 'unsupported'
       ? 'Браузер не підтримує системні сповіщення — працюватимуть сповіщення в застосунку'
@@ -58,12 +60,22 @@ export function Header({ meta, notifyEnabled, notifyPermission, onToggleNotify, 
             ))}
         </div>
         <div className="ml-auto flex items-center gap-1">
+          <div className="mr-1 flex overflow-hidden rounded-lg border border-white/10 text-xs">
+            <button className={clsx('flex items-center gap-1 px-2.5 py-1.5', view === 'scanner' ? 'bg-emerald-500/15 text-emerald-200' : 'text-slate-400 hover:bg-white/5')} onClick={() => onChangeView('scanner')} title="Поточні зв’язки">
+              <Radar size={14} /> <span className="hidden sm:inline">Сканер</span>
+            </button>
+            <button className={clsx('flex items-center gap-1 px-2.5 py-1.5', view === 'journal' ? 'bg-emerald-500/15 text-emerald-200' : 'text-slate-400 hover:bg-white/5')} onClick={() => onChangeView('journal')} title="Історія спредів від порога журналу">
+              <History size={14} /> <span className="hidden sm:inline">Журнал</span>
+            </button>
+          </div>
+          {view === 'scanner' && (
           <button className="btn-ghost relative lg:hidden" onClick={onOpenFilters} aria-label="Фільтри">
             <SlidersHorizontal size={18} />
             {activeFilters > 0 && (
               <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-emerald-400 px-1 text-[10px] font-bold text-ink-950">{activeFilters}</span>
             )}
           </button>
+          )}
           <button className={clsx('btn-ghost', notifyEnabled && 'text-emerald-300')} onClick={onToggleNotify} title={notifyTitle} aria-label={notifyTitle}>
             {notifyEnabled ? <Bell size={18} /> : <BellOff size={18} />}
             <span className="hidden sm:inline">{notifyEnabled ? 'Сповіщення увімк.' : 'Сповіщення'}</span>
