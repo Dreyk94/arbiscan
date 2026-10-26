@@ -4,6 +4,7 @@ import { AlertsStack, Toast } from './components/AlertsStack';
 import { EmptyState } from './components/EmptyState';
 import { FiltersPanel } from './components/FiltersPanel';
 import { Header } from './components/Header';
+import { JournalPanel } from './components/JournalPanel';
 import { OpportunityTable } from './components/OpportunityTable';
 import { StatusStrip } from './components/StatusStrip';
 import { useLocalStorage } from './hooks/useLocalStorage';
@@ -17,6 +18,7 @@ export default function App() {
   const [filters, setFilters] = useLocalStorage<FilterState>('arbiscan.filters.v1', DEFAULT_FILTERS, (s) => ({ ...DEFAULT_FILTERS, ...s }));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [view, setView] = useLocalStorage<'scanner' | 'journal'>('arbiscan.view', 'scanner');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; action?: { label: string; onClick: () => void } } | null>(null);
@@ -69,8 +71,14 @@ export default function App() {
         onOpenAdmin={() => setAdminOpen(true)}
         onOpenFilters={() => setFiltersOpen(true)}
         activeFilters={activeCount}
+        view={view}
+        onChangeView={setView}
       />
       <main className="mx-auto flex max-w-[1600px] gap-5 px-3 py-4 sm:px-6">
+        {view === 'journal' ? (
+          <JournalPanel now={now} scanIntervalSec={data?.config.scanIntervalSec ?? 10} />
+        ) : (
+        <>
         <FiltersPanel filters={filters} onChange={setFilters} networks={networks} tradeSizeUsd={data?.config.tradeSizeUsd ?? 100} open={filtersOpen} onClose={() => setFiltersOpen(false)} />
         <section className="min-w-0 flex-1 space-y-3">
           <StatusStrip data={data} now={now} error={error} />
@@ -135,9 +143,11 @@ export default function App() {
             />
           )}
           <p className="pt-2 text-[11px] leading-relaxed text-slate-500">
-            Розрахунки орієнтовні та не є фінансовою порадою. «Перевірено» означає, що на момент сканування підтверджено глибину стакана і доступність переказу у спільній мережі з тим самим контрактом; ціни змінюються, тож прибуток ніколи не гарантований.
+            Розрахунки орієнтовні та не є фінансовою порадою. «Перевірено» означає, що на момент сканування підтверджено глибину стакана і доступність переказу у спільній мережі з тим самим контрактом; ціни змінюються, тож прибуток ніколи не гарантований. Зв’язки з закритим виводом або депозитом позначаються «Недоступна для переказу» і не подаються як робочі.
           </p>
         </section>
+        </>
+        )}
       </main>
       <AdminPanel open={adminOpen} onClose={() => setAdminOpen(false)} onChanged={() => void reload()} />
       <AlertsStack alerts={notify.alerts} onDismiss={notify.dismiss} onOpen={openOpportunity} />

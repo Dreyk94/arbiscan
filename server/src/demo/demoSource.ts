@@ -69,7 +69,7 @@ export class DemoSource implements MarketDataSource {
     const phase = (hash(coin.base) % 1000) / 159;
     const drift = Math.sin(t / 90 + phase) * 0.004 + Math.sin(t / 23 + phase * 2) * 0.0015;
     const bucket = Math.floor(t / 5);
-    const noise = (rng(hash(`${coin.base}:${ex}:${bucket}`) ^ this.seed)() - 0.5) * 0.002;
+    const noise = (rng(hash(`${coin.base}:${ex}:${bucket}`) ^ this.seed)() - 0.5) * ((coin.volatilityPct ?? 0.1) / 100) * 2;
     let bias = l.bias;
     if (coin.flash && coin.flash.exchange === ex) {
       const offset = hash(coin.base) % coin.flash.periodSec;

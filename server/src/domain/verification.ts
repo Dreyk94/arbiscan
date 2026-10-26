@@ -1,5 +1,5 @@
 import { normalizeContract, normalizeName } from './networks.js';
-import type { AssetInfo, AssetInfoState, ChainInfo, NetworkRoute, NetworkStatus } from './types.js';
+import type { AssetInfo, AssetInfoState, ChainInfo, NetworkRoute, NetworkStatus, TransferLeg } from './types.js';
 
 export interface NetworkVerification {
   status: NetworkStatus;
@@ -10,6 +10,8 @@ export interface NetworkVerification {
   /** Хоча б в одній спільній мережі контракти збігаються явно */
   contractConfirmed: boolean;
   nameMismatch: boolean;
+  /** Стан гаманців у кожній спільній мережі того самого токена */
+  legs: TransferLeg[];
   notes: string[];
 }
 
@@ -41,7 +43,7 @@ export function verifyTransfer(
         ? 'Немає даних про мережі на обох біржах'
         : `Немає даних про мережі на біржі ${!buy ? 'купівлі' : 'продажу'}`,
     );
-    return { status: 'unverified', networks: [...known].sort(), contractMismatch: false, contractConfirmed: false, nameMismatch, notes };
+    return { status: 'unverified', networks: [...known].sort(), contractMismatch: false, contractConfirmed: false, nameMismatch, legs: [], notes };
   }
 
   const sellByNet = new Map<string, ChainInfo>();
@@ -59,7 +61,7 @@ export function verifyTransfer(
   }
   if (!common.length) {
     notes.push('Немає спільної мережі для переказу');
-    return { status: 'no_common', networks: [], contractMismatch: false, contractConfirmed: false, nameMismatch, notes };
+    return { status: 'no_common', networks: [], contractMismatch: false, contractConfirmed: false, nameMismatch, legs: [], notes };
   }
 
   const sameToken = common.filter(({ b, s }) => !b.contract || !s.contract || b.contract === s.contract);
@@ -67,18 +69,35 @@ export function verifyTransfer(
   const mismatched = common.filter(({ b, s }) => b.contract && s.contract && b.contract !== s.contract);
   for (const { b } of mismatched) notes.push(`Різні контракти в мережі ${b.network}`);
   if (!sameToken.length) {
-    return { status: 'mismatch', networks: [], contractMismatch: true, contractConfirmed: false, nameMismatch, notes };
+    return { status: 'mismatch', networks: [], contractMismatch: true, contractConfirmed: false, nameMismatch, legs: [], notes };
+  }
+
+  const legs: TransferLeg[] = sameToken.map(({ b, s }) => ({
+    network: b.network,
+    withdrawEnabled: b.withdrawEnabled,
+    depositEnabled: s.depositEnabled,
+    withdrawFeeCoin: b.withdrawFee,
+    minWithdraw: b.minWithdraw,
+  }));
+  for (const leg of legs) {
+    if (leg.withdrawEnabled && leg.depositEnabled) continue;
+    const closed = [
+      !leg.withdrawEnabled ? `вивід з ${buy.exchange} закрито` : null,
+      !leg.depositEnabled ? `депозит на ${sell.exchange} закрито` : null,
+    ].filter(Boolean);
+    notes.push(`Мережа ${leg.network}: ${closed.join(', ')}`);
   }
 
   const open = sameToken.filter(({ b, s }) => b.withdrawEnabled && s.depositEnabled);
   if (!open.length) {
-    notes.push('Вивід на біржі купівлі або депозит на біржі продажу призупинено');
+    notes.push('Недоступна для переказу: усі спільні мережі закриті на вивід або депозит');
     return {
       status: 'suspended',
       networks: sameToken.map(({ b }) => b.network).sort(),
       contractMismatch: mismatched.length > 0,
       contractConfirmed,
       nameMismatch,
+      legs,
       notes,
     };
   }
@@ -92,10 +111,12 @@ export function verifyTransfer(
       withdrawFeeCoin: cheapest.b.withdrawFee,
       withdrawFeeUsd: cheapest.b.withdrawFee * price,
       contract: cheapest.b.contract ?? cheapest.s.contract,
+      minWithdraw: cheapest.b.minWithdraw,
     },
     contractMismatch: mismatched.length > 0,
     contractConfirmed,
     nameMismatch,
+    legs,
     notes,
   };
 }

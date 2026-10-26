@@ -1,7 +1,9 @@
 import type { Settings } from './config/settings.js';
 import type { SettingsStore } from './config/settingsStore.js';
 import { evaluatePair, findPriceOutliers } from './domain/arbitrage.js';
+import type { Journal } from './domain/journal.js';
 import { getAsset } from './domain/verification.js';
+import { assessVolatility, PriceHistory } from './domain/volatility.js';
 import {
   type AssetInfoState,
   EXCHANGES,
@@ -16,7 +18,6 @@ import {
 import { createLimiter } from './exchanges/http.js';
 import type { MarketDataSource } from './exchanges/types.js';
 
-const ASSET_INFO_TTL_MS = 10 * 60_000;
 /** Стакан старший за цей час вважається неперевіреним */
 const BOOK_MAX_AGE_MS = 60_000;
 
@@ -44,6 +45,7 @@ export class Scanner {
   private opportunities: Opportunity[] = [];
   private seen = new Map<string, SeenEntry>();
   private assetCache = new Map<ExchangeId, AssetInfoState & { cachedAt: number }>();
+  private prices = new PriceHistory();
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<void> | null = null;
   private meta: ScanMeta;
@@ -52,6 +54,7 @@ export class Scanner {
     private readonly store: SettingsStore,
     private readonly sources: { demo: MarketDataSource; live: MarketDataSource },
     private readonly clock: () => number = Date.now,
+    private readonly journal?: Journal,
   ) {
     this.meta = this.emptyMeta(store.get().dataMode);
     store.onChange((next, prev) => {
@@ -73,6 +76,8 @@ export class Scanner {
     this.opportunities = [];
     this.seen.clear();
     this.assetCache.clear();
+    this.prices.clear();
+    this.journal?.closeAll(this.clock());
     this.meta = this.emptyMeta(mode);
   }
 
@@ -158,10 +163,21 @@ export class Scanner {
         }
       }
 
+      const priceTs = this.clock();
+      for (const markets of byBase.values()) {
+        for (const m of markets) this.prices.record(bookKey(m), (m.bestBid + m.bestAsk) / 2, priceTs);
+      }
+      this.prices.prune(priceTs);
+
       const candidates = this.findCandidates(byBase, settings);
       const books = await this.fetchBooks(source, candidates, settings);
 
       const now = this.clock();
+      const windowMs = settings.volatility.windowSec * 1000;
+      const fetchedAt = (ex: ExchangeId) => {
+        const a = assets.get(ex);
+        return a?.status === 'ok' ? a.fetchedAt : undefined;
+      };
       const result: Opportunity[] = [];
       for (const c of candidates) {
         const evaluated = evaluatePair({
@@ -172,6 +188,12 @@ export class Scanner {
           buyAsset: getAsset(assets.get(c.buy.exchange), c.buy.base),
           sellAsset: getAsset(assets.get(c.sell.exchange), c.sell.base),
           priceOutlier: c.outlier,
+          volatility: assessVolatility(
+            this.prices.move(bookKey(c.buy), now, windowMs),
+            this.prices.move(bookKey(c.sell), now, windowMs),
+            settings.volatility,
+          ),
+          assetInfoFetchedAt: { buy: fetchedAt(c.buy.exchange), sell: fetchedAt(c.sell.exchange) },
           settings,
           now,
         });
@@ -187,6 +209,7 @@ export class Scanner {
       }
 
       this.opportunities = result.sort((a, b) => b.spreadPct - a.spreadPct);
+      if (settings.journal.enabled) this.journal?.observe(this.opportunities, now, settings.journal);
       this.meta = {
         mode: settings.dataMode,
         cycle: this.meta.cycle + 1,
@@ -274,7 +297,7 @@ export class Scanner {
 
   private async getAssetInfo(source: MarketDataSource, ex: ExchangeId): Promise<AssetInfoState> {
     const cached = this.assetCache.get(ex);
-    const ttl = cached?.status === 'ok' ? ASSET_INFO_TTL_MS : 60_000;
+    const ttl = cached?.status === 'ok' ? this.store.get().assetInfoRefreshSec * 1000 : 60_000;
     if (cached && this.clock() - cached.cachedAt < ttl && source.kind === 'live') return cached;
     try {
       const state = await source.fetchAssetInfo(ex);

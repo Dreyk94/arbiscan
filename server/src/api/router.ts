@@ -5,11 +5,19 @@ import { DEFAULT_SETTINGS, partialSettingsSchema, settingsSchema } from '../conf
 import type { SettingsStore } from '../config/settingsStore.js';
 import type { DemoStore } from '../demo/demoStore.js';
 import { demoScenarioSchema } from '../demo/scenario.js';
+import type { Journal, JournalVerdict } from '../domain/journal.js';
+import { journalToCsv } from '../domain/journal.js';
 import { EXCHANGE_LABELS, EXCHANGES } from '../domain/types.js';
 import type { Scanner } from '../scanner.js';
 
-export function createApiRouter(deps: { store: SettingsStore; scanner: Scanner; demo: DemoStore; adminToken: string }) {
-  const { store, scanner, demo, adminToken } = deps;
+export function createApiRouter(deps: {
+  store: SettingsStore;
+  scanner: Scanner;
+  demo: DemoStore;
+  journal: Journal;
+  adminToken: string;
+}) {
+  const { store, scanner, demo, journal, adminToken } = deps;
   const r = express.Router();
 
   const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
@@ -36,10 +44,51 @@ export function createApiRouter(deps: { store: SettingsStore; scanner: Scanner; 
         scanIntervalSec: s.scanIntervalSec,
         maxPlausibleSpreadPct: s.maxPlausibleSpreadPct,
         notifications: s.notifications,
+        journal: s.journal,
+        volatility: s.volatility,
+        maxSlippageShareOfSpreadPct: s.maxSlippageShareOfSpreadPct,
+        assetInfoRefreshSec: s.assetInfoRefreshSec,
         fees: Object.fromEntries(EXCHANGES.map((ex) => [ex, s.exchanges[ex].takerFeePct])),
         exchanges: EXCHANGES.map((ex) => ({ id: ex, label: EXCHANGE_LABELS[ex], enabled: s.exchanges[ex].enabled })),
       },
     });
+  });
+
+  const journalQuery = z.object({
+    limit: z.coerce.number().int().min(1).max(10_000).optional(),
+    base: z.string().trim().toUpperCase().optional(),
+    since: z.coerce.number().int().nonnegative().optional(),
+    verdict: z.enum(['actionable', 'blocked', 'unprofitable', 'suspicious', 'unverified']).optional(),
+  });
+
+  const parseJournalQuery = (req: Request) => {
+    const parsed = journalQuery.safeParse(req.query);
+    return parsed.success ? parsed.data : null;
+  };
+
+  r.get('/journal', (req, res) => {
+    const q = parseJournalQuery(req);
+    if (!q) return res.status(400).json({ error: 'Некоректні параметри журналу' });
+    const filtered = journal.list({ base: q.base || undefined, since: q.since, verdict: q.verdict as JournalVerdict | undefined });
+    res.json({
+      entries: q.limit ? filtered.slice(0, q.limit) : filtered.slice(0, 500),
+      stats: journal.stats(filtered),
+      config: store.get().journal,
+    });
+  });
+
+  r.get('/journal/export.csv', (req, res) => {
+    const q = parseJournalQuery(req);
+    if (!q) return res.status(400).json({ error: 'Некоректні параметри журналу' });
+    const entries = journal.list({ ...q, base: q.base || undefined, verdict: q.verdict as JournalVerdict | undefined });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="arbiscan-journal-${Date.now()}.csv"`);
+    res.send(journalToCsv(entries));
+  });
+
+  r.delete('/admin/journal', requireAdmin, (_req, res) => {
+    journal.clear();
+    res.json({ ok: true });
   });
 
   r.post('/admin/login', requireAdmin, (_req, res) => res.json({ ok: true }));

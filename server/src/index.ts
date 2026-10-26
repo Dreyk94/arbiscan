@@ -11,6 +11,7 @@ import { DemoSource } from './demo/demoSource.js';
 import { DemoStore } from './demo/demoStore.js';
 import { DEFAULT_DEMO_SCENARIO } from './demo/scenario.js';
 import { LiveSource } from './exchanges/liveSource.js';
+import { createFileJournal } from './journalStore.js';
 import { Scanner } from './scanner.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -27,14 +28,15 @@ if (!process.env.ADMIN_TOKEN) {
 const store = new SettingsStore(path.join(dataDir, 'settings.json'));
 const demoSource = new DemoSource(DEFAULT_DEMO_SCENARIO);
 const demo = new DemoStore(path.join(dataDir, 'demo-scenario.json'), demoSource);
-const scanner = new Scanner(store, { demo: demoSource, live: new LiveSource() });
+const journal = createFileJournal(path.join(dataDir, 'journal.json'));
+const scanner = new Scanner(store, { demo: demoSource, live: new LiveSource() }, Date.now, journal);
 
 const app = express();
 app.disable('x-powered-by');
 app.use(cors());
 app.use(compression());
 app.use(express.json({ limit: '2mb' }));
-app.use('/api', createApiRouter({ store, scanner, demo, adminToken: ADMIN_TOKEN }));
+app.use('/api', createApiRouter({ store, scanner, demo, journal, adminToken: ADMIN_TOKEN }));
 
 if (fs.existsSync(webDist)) {
   app.use(express.static(webDist, { maxAge: '1h', index: false }));

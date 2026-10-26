@@ -1,4 +1,4 @@
-import type { OpportunitiesResponse, Settings } from '../types';
+import type { JournalResponse, JournalVerdict, OpportunitiesResponse, Settings } from '../types';
 
 const TOKEN_KEY = 'arbiscan.adminToken';
 
@@ -28,8 +28,28 @@ async function request<T>(path: string, init: RequestInit = {}, admin = false): 
 export const getAdminToken = () => sessionStorage.getItem(TOKEN_KEY);
 export const setAdminToken = (t: string | null) => (t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY));
 
+export interface JournalQuery {
+  limit?: number;
+  base?: string;
+  since?: number;
+  verdict?: JournalVerdict | '';
+}
+
+function journalParams(q: JournalQuery): string {
+  const p = new URLSearchParams();
+  if (q.limit) p.set('limit', String(q.limit));
+  if (q.base) p.set('base', q.base);
+  if (q.since) p.set('since', String(q.since));
+  if (q.verdict) p.set('verdict', q.verdict);
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
 export const api = {
   opportunities: () => request<OpportunitiesResponse>('/opportunities'),
+  journal: (q: JournalQuery = {}) => request<JournalResponse>(`/journal${journalParams(q)}`),
+  journalCsvUrl: (q: JournalQuery = {}) => `/api/journal/export.csv${journalParams(q)}`,
+  clearJournal: () => request<{ ok: true }>('/admin/journal', { method: 'DELETE' }, true),
   login: (token: string) => request<{ ok: true }>('/admin/login', { method: 'POST', headers: { 'x-admin-token': token } }),
   getSettings: () => request<{ settings: Settings; defaults: Settings }>('/admin/settings', {}, true),
   updateSettings: (patch: Partial<Settings>) =>

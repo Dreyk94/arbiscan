@@ -27,6 +27,8 @@ export const demoScenarioSchema = z.object({
         volume24hUsd: z.number().nonnegative(),
         networks: z.array(z.object({ network: z.string(), contract: z.string().optional(), withdrawFee: z.number().nonnegative() })).min(1),
         listings: z.object({ okx: listing.optional(), bybit: listing.optional(), bitget: listing.optional(), gate: listing.optional(), mexc: listing.optional(), binance: listing.optional(), kucoin: listing.optional() }),
+        /** Амплітуда випадкових коливань ціни між циклами, % (за замовчуванням 0.1) — для демонстрації ризику волатильності */
+        volatilityPct: z.number().min(0).max(50).optional(),
         /** Періодична «спалахова» зв'язка: додаткове зміщення на біржі протягом activeSec кожні periodSec */
         flash: z
           .object({ exchange: z.enum(EXCHANGES), bias: z.number(), periodSec: z.number().positive(), activeSec: z.number().positive() })
@@ -77,6 +79,7 @@ export const DEFAULT_DEMO_SCENARIO: DemoScenario = {
       base: 'MEME', fullName: 'Memecoin', price: 0.0115, volume24hUsd: 900_000,
       networks: ETH_USDT_LIKE('0xb131f4a55907b10d1f0a50d8ab8fa09ec342cd74', 400),
       listings: { bybit: { bias: -2.2, depthUsd: 9_000 }, bitget: { bias: 1.4, depthUsd: 70 }, binance: { bias: 0.1, depthUsd: 80_000 }, gate: { bias: 2.8, depthUsd: 4_000 } },
+      volatilityPct: 2.5,
     },
     {
       base: 'GMT', fullName: 'STEPN', price: 0.21, volume24hUsd: 6_000_000,
